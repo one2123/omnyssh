@@ -1,14 +1,14 @@
-import { writable } from 'svelte/store';
-import type { FileEntryDto, TransferProgressDto } from '$lib/bindings';
+import { writable } from "svelte/store";
+import type { FileEntryDto, TransferProgressDto } from "$lib/bindings";
 
 // Per-session SFTP state for the dual-pane browser (tech-gui.md §3.2, §3.5), keyed by
 // the backend public session id — the same id the `sftp-*` events carry, so the router
 // routes each event to the right tab. Navigation/marking/transfer logic lives here as
 // pure reducers so it is unit-testable; `SftpView.svelte` is a thin view + dispatcher.
 
-export type PaneSide = 'local' | 'remote';
-type SftpStatus = 'connecting' | 'connected' | 'failed';
-type OpKind = 'upload' | 'download' | 'mkdir' | 'rename' | 'delete';
+export type PaneSide = "local" | "remote";
+type SftpStatus = "connecting" | "connected" | "failed";
+type OpKind = "upload" | "download" | "mkdir" | "rename" | "delete";
 
 /** One side's browsing state: current directory, its entries, and the marked set. */
 export interface Pane {
@@ -22,10 +22,15 @@ export interface Pane {
 
 /** The transfer currently reporting progress (one at a time — the core is sequential). */
 interface Transfer {
-  kind: 'upload' | 'download';
-  name: string;
-  done: number;
-  total: number;
+  transferId: number;
+  stage: "preparing" | "transferring";
+  kind: "upload" | "download";
+  rootName: string;
+  currentFile: string;
+  bytesDone: number;
+  bytesTotal: number;
+  filesDone: number;
+  filesTotal: number;
 }
 
 /** A file preview (a remote `file-preview` event, or a local read) shown in a modal. */
@@ -59,27 +64,38 @@ export interface SftpSession {
   error?: string;
   /** Pane(s) to re-list once `pending` drains (a mutation changed the FS); the
    *  component performs the listing and clears this. */
-  refresh?: PaneSide | 'both';
+  refresh?: PaneSide | "both";
 }
 
 function emptyPane(): Pane {
-  return { path: '', entries: [], loading: true, marked: new Set() };
+  return { path: "", entries: [], loading: true, marked: new Set() };
 }
 
 /** A fresh session in the connecting state, both panes empty. */
 export function newSession(hostName: string): SftpSession {
   return {
     hostName,
-    status: 'connecting',
+    status: "connecting",
     local: emptyPane(),
     remote: emptyPane(),
-    pending: []
+    pending: [],
   };
 }
 
 /** A directory listing landed for a pane: replace entries at `path`, clear marks. */
-export function applyListing(pane: Pane, path: string, entries: FileEntryDto[]): Pane {
-  return { ...pane, path, entries, loading: false, marked: new Set(), error: undefined };
+export function applyListing(
+  pane: Pane,
+  path: string,
+  entries: FileEntryDto[],
+): Pane {
+  return {
+    ...pane,
+    path,
+    entries,
+    loading: false,
+    marked: new Set(),
+    error: undefined,
+  };
 }
 
 /** Toggle an entry's marked state (the batch transfer/delete set). */
@@ -144,7 +160,7 @@ export function dragPayload(pane: Pane, entry: FileEntryDto): FileEntryDto[] {
  *  Drive letters compare case-insensitively, as Windows does. */
 export function rootOf(path: string, roots: string[]): string {
   const lower = path.toLowerCase();
-  return roots.find((root) => lower.startsWith(root.toLowerCase())) ?? '';
+  return roots.find((root) => lower.startsWith(root.toLowerCase())) ?? "";
 }
 
 // A Windows path that is only a root: a drive, a share ('\\\\server\\share'), or a drive,
@@ -163,7 +179,7 @@ export function baseName(path: string): string {
 /** Human-readable byte size for a listing row or a transfer bar. */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
+  const units = ["KB", "MB", "GB", "TB"];
   let value = bytes / 1024;
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) {
@@ -196,40 +212,97 @@ export function formatDate(secs: number | null | undefined, full = false): strin
 
 /** Widen the pending refresh target: two different sides collapse to `both`. */
 export function mergeRefresh(
-  current: PaneSide | 'both' | undefined,
-  next: PaneSide
-): PaneSide | 'both' {
+  current: PaneSide | "both" | undefined,
+  next: PaneSide,
+): PaneSide | "both" {
   if (!current || current === next) return next;
-  return 'both';
+  return "both";
 }
 
 /** Fold a `transfer-progress` tick in. The transfer's kind/name come from the front
  *  pending op — which, because the core is sequential, is always the op now running —
  *  so the frontend never needs to know the backend-allocated transfer id in advance. */
-export function applyProgress(session: SftpSession, p: TransferProgressDto): SftpSession {
+export function applyProgress(
+  session: SftpSession,
+  p: TransferProgressDto,
+): SftpSession {
   const front = session.pending[0];
-  if (!front || (front.kind !== 'upload' && front.kind !== 'download')) return session;
+
+  if (!front || (front.kind !== "upload" && front.kind !== "download")) {
+    return session;
+  }
+
   return {
     ...session,
-    transfer: { kind: front.kind, name: front.name ?? '', done: p.done, total: p.total }
+    transfer: {
+      transferId: p.transferId,
+      stage: p.stage as "preparing" | "transferring",
+      kind: front.kind,
+      rootName: p.rootName,
+      currentFile: p.currentFile,
+      bytesDone: p.bytesDone,
+      bytesTotal: p.bytesTotal,
+      filesDone: p.filesDone,
+      filesTotal: p.filesTotal,
+    },
   };
 }
 
 /** What the transfer strip shows: the running transfer's last tick or, from its dispatch
  *  until the first tick (the core may spend a while walking a folder), that it is being
  *  prepared. */
-export function transferState(
-  session: SftpSession
-): (Transfer & { preparing: boolean }) | undefined {
-  if (session.transfer) return { ...session.transfer, preparing: false };
+export interface TransferDisplay {
+  transferId?: number;
+  stage: 'preparing' | 'transferring';
+  kind: 'upload' | 'download';
+  name: string;
+  rootName: string;
+  currentFile: string;
+  done: number;
+  total: number;
+  bytesDone: number;
+  bytesTotal: number;
+  filesDone: number;
+  filesTotal: number;
+  preparing: boolean;
+}
+
+export function transferState(session: SftpSession): TransferDisplay | undefined {
+  if (session.transfer) {
+    const t = session.transfer;
+    return {
+      ...t,
+      name: t.rootName || t.currentFile || '',
+      done: t.bytesDone,
+      total: t.bytesTotal,
+      preparing: false,
+    };
+  }
   const front = session.pending[0];
   if (front?.kind !== 'upload' && front?.kind !== 'download') return undefined;
-  return { kind: front.kind, name: front.name ?? '', done: 0, total: 0, preparing: true };
+  return {
+    stage: 'preparing',
+    kind: front.kind,
+    name: front.name ?? '',
+    rootName: front.name ?? '',
+    currentFile: '',
+    done: 0,
+    total: 0,
+    bytesDone: 0,
+    bytesTotal: 0,
+    filesDone: 0,
+    filesTotal: 0,
+    preparing: true,
+  };
 }
 
 /** Fold an `sftp-op-done` in: pop the front pending op (FIFO), record its refresh
  *  target, clear the transfer display if it was a transfer, and surface any error. */
-export function applyOpDone(session: SftpSession, ok: boolean, error?: string): SftpSession {
+export function applyOpDone(
+  session: SftpSession,
+  ok: boolean,
+  error?: string,
+): SftpSession {
   if (session.pending.length === 0) return session;
   const [front, ...rest] = session.pending;
   const wasTransfer = front.kind === 'upload' || front.kind === 'download';
@@ -274,7 +347,12 @@ function createSftp() {
     beginLoading(id: number, side: PaneSide): void {
       mut(id, (s) => ({ ...s, [side]: { ...s[side], loading: true } }));
     },
-    listing(id: number, side: PaneSide, path: string, entries: FileEntryDto[]): void {
+    listing(
+      id: number,
+      side: PaneSide,
+      path: string,
+      entries: FileEntryDto[],
+    ): void {
       mut(id, (s) => ({ ...s, [side]: applyListing(s[side], path, entries) }));
     },
     paneError(id: number, side: PaneSide, error: string): void {
@@ -311,7 +389,11 @@ function createSftp() {
      *  (leaving it set strands it on "Loading…"); a legit in-flight local listing keeps
      *  its own spinner. */
     sessionError(id: number, error: string): void {
-      mut(id, (s) => ({ ...s, error, remote: { ...s.remote, loading: false } }));
+      mut(id, (s) => ({
+        ...s,
+        error,
+        remote: { ...s.remote, loading: false },
+      }));
     },
     remove(id: number): void {
       update((m) => {
@@ -320,7 +402,7 @@ function createSftp() {
         next.delete(id);
         return next;
       });
-    }
+    },
   };
 }
 
