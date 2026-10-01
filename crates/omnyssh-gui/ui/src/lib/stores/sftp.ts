@@ -24,7 +24,7 @@ export interface Pane {
 interface Transfer {
   transferId: number;
   stage: "preparing" | "transferring";
-  kind: "upload" | "download";
+  kind: "upload" | "download" | "delete";
   rootName: string;
   currentFile: string;
   bytesDone: number;
@@ -40,7 +40,7 @@ interface Preview {
 }
 
 /** The `sftp-op-done` error of a cancelled transfer, in the core's words. */
-export const CANCELLED = 'Transfer cancelled';
+export const CANCELLED = "Transfer cancelled";
 
 // A mutating op awaiting its `sftp-op-done`. The core processes commands sequentially,
 // so op-done events arrive in issue order — this FIFO correlates each op-done to the op
@@ -115,21 +115,30 @@ export function markedEntries(pane: Pane): FileEntryDto[] {
  *  Windows and macOS do by default. macOS also takes an accented letter composed or not
  *  as the same; Windows does not, and gets a needless question at most. */
 function nameKey(name: string, caseless: boolean): string {
-  return caseless ? name.normalize('NFC').toLowerCase() : name;
+  return caseless ? name.normalize("NFC").toLowerCase() : name;
 }
 
 /** How many of `names` the listing `entries` already holds: what a transfer into its
  *  directory would replace, or merge into for a folder. */
-export function clashCount(names: string[], entries: FileEntryDto[], caseless: boolean): number {
+export function clashCount(
+  names: string[],
+  entries: FileEntryDto[],
+  caseless: boolean,
+): number {
   const there = new Set(
-    entries.filter((e) => e.name !== '..').map((e) => nameKey(e.name, caseless))
+    entries
+      .filter((e) => e.name !== "..")
+      .map((e) => nameKey(e.name, caseless)),
   );
   return names.filter((name) => there.has(nameKey(name, caseless))).length;
 }
 
 /** A name in `names` that an earlier one would land on too: two files dropped from
  *  different folders, or `A.txt` and `a.txt` going where case is ignored. */
-export function repeatedName(names: string[], caseless: boolean): string | undefined {
+export function repeatedName(
+  names: string[],
+  caseless: boolean,
+): string | undefined {
   const seen = new Set<string>();
   return names.find((name) => {
     const key = nameKey(name, caseless);
@@ -143,15 +152,15 @@ export function repeatedName(names: string[], caseless: boolean): string | undef
  *  component. Joined onto a local folder, anything else would land below it, unseen by
  *  the Replace check. On Windows `\\` separates too. */
 export function isPlainName(name: string, windows: boolean): boolean {
-  if (['', '.', '..'].includes(name) || name.includes('/')) return false;
-  return !(windows && name.includes('\\'));
+  if (["", ".", ".."].includes(name) || name.includes("/")) return false;
+  return !(windows && name.includes("\\"));
 }
 
 /** What dragging `entry` carries: every marked entry when `entry` is one of them, else
  *  `entry` alone. Folders travel with their whole contents; `..` is not transferable,
  *  so dragging it carries nothing. */
 export function dragPayload(pane: Pane, entry: FileEntryDto): FileEntryDto[] {
-  if (entry.name === '..') return [];
+  if (entry.name === "..") return [];
   if (pane.marked.has(entry.path)) return markedEntries(pane);
   return [entry];
 }
@@ -165,15 +174,16 @@ export function rootOf(path: string, roots: string[]): string {
 
 // A Windows path that is only a root: a drive, a share ('\\\\server\\share'), or a drive,
 // share or volume in the long form that starts '\\\\?\\'.
-const WINDOWS_ROOT = /^(?:[a-z]:|\\\\[?.]\\(?:unc\\[^\\]+\\[^\\]+|[^\\]+)|\\\\[^\\]+\\[^\\]+)\\?$/i;
+const WINDOWS_ROOT =
+  /^(?:[a-z]:|\\\\[?.]\\(?:unc\\[^\\]+\\[^\\]+|[^\\]+)|\\\\[^\\]+\\[^\\]+)\\?$/i;
 
 /** The name a local path is uploaded under: its last component, or '' for a root
  *  ('/', 'C:\\', '\\\\server\\share'), which has no name to give it on the server. A path
  *  with no '/' is a Windows one, where '\\' separates; elsewhere '\\' is part of a name. */
 export function baseName(path: string): string {
-  const sep = path.includes('/') ? '/' : '\\';
-  if (sep === '\\' && WINDOWS_ROOT.test(path)) return '';
-  return path.split(sep).filter(Boolean).at(-1) ?? '';
+  const sep = path.includes("/") ? "/" : "\\";
+  if (sep === "\\" && WINDOWS_ROOT.test(path)) return "";
+  return path.split(sep).filter(Boolean).at(-1) ?? "";
 }
 
 /** Human-readable byte size for a listing row or a transfer bar. */
@@ -190,23 +200,26 @@ export function formatBytes(bytes: number): string {
 }
 
 const dateFormat = new Intl.DateTimeFormat(undefined, {
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit'
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
 });
 const dateFormatFull = new Intl.DateTimeFormat(undefined, {
-  dateStyle: 'full',
-  timeStyle: 'medium'
+  dateStyle: "full",
+  timeStyle: "medium",
 });
 
 /** A listing row's date from Unix seconds, or an em dash when the time is unknown.
  *  `full` gives the long form used in the hover title. */
-export function formatDate(secs: number | null | undefined, full = false): string {
-  if (secs == null || !Number.isFinite(secs)) return '—';
+export function formatDate(
+  secs: number | null | undefined,
+  full = false,
+): string {
+  if (secs == null || !Number.isFinite(secs)) return "—";
   const date = new Date(secs * 1000);
-  if (Number.isNaN(date.getTime())) return '—';
+  if (Number.isNaN(date.getTime())) return "—";
   return (full ? dateFormatFull : dateFormat).format(date);
 }
 
@@ -228,7 +241,12 @@ export function applyProgress(
 ): SftpSession {
   const front = session.pending[0];
 
-  if (!front || (front.kind !== "upload" && front.kind !== "download")) {
+  if (
+    !front ||
+    (front.kind !== "upload" &&
+      front.kind !== "download" &&
+      front.kind !== "delete")
+  ) {
     return session;
   }
 
@@ -253,8 +271,8 @@ export function applyProgress(
  *  prepared. */
 export interface TransferDisplay {
   transferId?: number;
-  stage: 'preparing' | 'transferring';
-  kind: 'upload' | 'download';
+  stage: "preparing" | "transferring";
+  kind: "upload" | "download";
   name: string;
   rootName: string;
   currentFile: string;
@@ -267,25 +285,27 @@ export interface TransferDisplay {
   preparing: boolean;
 }
 
-export function transferState(session: SftpSession): TransferDisplay | undefined {
+export function transferState(
+  session: SftpSession,
+): TransferDisplay | undefined {
   if (session.transfer) {
     const t = session.transfer;
     return {
       ...t,
-      name: t.rootName || t.currentFile || '',
+      name: t.rootName || t.currentFile || "",
       done: t.bytesDone,
       total: t.bytesTotal,
       preparing: false,
     };
   }
   const front = session.pending[0];
-  if (front?.kind !== 'upload' && front?.kind !== 'download') return undefined;
+  if (front?.kind !== "upload" && front?.kind !== "download") return undefined;
   return {
-    stage: 'preparing',
+    stage: "preparing",
     kind: front.kind,
-    name: front.name ?? '',
-    rootName: front.name ?? '',
-    currentFile: '',
+    name: front.name ?? "",
+    rootName: front.name ?? "",
+    currentFile: "",
     done: 0,
     total: 0,
     bytesDone: 0,
@@ -301,22 +321,33 @@ export function transferState(session: SftpSession): TransferDisplay | undefined
 export function applyOpDone(
   session: SftpSession,
   ok: boolean,
-  error?: string,
+  error?: string | null,
 ): SftpSession {
   if (session.pending.length === 0) return session;
+
   const [front, ...rest] = session.pending;
-  const wasTransfer = front.kind === 'upload' || front.kind === 'download';
-  // A later op's success must NOT wipe an earlier op's failure in the same batch — that
-  // silently masks e.g. a non-empty-folder delete beside a deleted sibling. Nor may the
-  // user's own cancel. The error persists until the next batch clears it (`clearError`,
-  // called on enqueue).
+  const wasTransfer =
+    front.kind === "upload" ||
+    front.kind === "download" ||
+    front.kind === "delete";
+
+  // Preserve an earlier error if a later operation succeeds, and don't
+  // replace the user's own cancellation with a generic error.
   const keep = ok || (error === CANCELLED && session.error != null);
+
+  const displayError =
+    !ok && front.kind === "delete" && /transfer\s+cancelled/i.test(error ?? "")
+      ? "Delete canceled"
+      : keep
+        ? session.error
+        : (error ?? "Operation failed");
+
   return {
     ...session,
     pending: rest,
     refresh: mergeRefresh(session.refresh, front.refresh),
-    error: keep ? session.error : (error ?? 'Operation failed'),
-    transfer: wasTransfer ? undefined : session.transfer
+    error: displayError,
+    transfer: wasTransfer ? undefined : session.transfer,
   };
 }
 
