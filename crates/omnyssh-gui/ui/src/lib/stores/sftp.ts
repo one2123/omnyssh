@@ -272,7 +272,7 @@ export function applyProgress(
 export interface TransferDisplay {
   transferId?: number;
   stage: "preparing" | "transferring";
-  kind: "upload" | "download";
+  kind: "upload" | "download" | "delete";
   name: string;
   rootName: string;
   currentFile: string;

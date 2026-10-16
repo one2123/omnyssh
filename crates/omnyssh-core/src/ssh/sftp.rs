@@ -534,15 +534,9 @@ async fn sftp_task_loop(
                     })
                     .await;
 
-                let result = delete_remote_tree(
-                    &sftp,
-                    &path,
-                    transfer_id,
-                    &event_tx,
-                    &cancel,
-                )
-                .await
-                .map_err(|e| format!("{e:#}"));
+                let result = delete_remote_tree(&sftp, &path, transfer_id, &event_tx, &cancel)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
                 cancels.finish_transfer(transfer_id);
                 let _ = event_tx.send(CoreEvent::SftpOpDone { result }).await;
             }

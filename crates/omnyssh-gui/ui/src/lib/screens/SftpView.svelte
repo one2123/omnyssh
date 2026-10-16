@@ -29,6 +29,7 @@
     type PaneSide
   } from '$lib/stores/sftp';
   import { lastError } from '$lib/stores/notifications';
+  import { maskText } from '$lib/stores/streamer';
   import { dropPoint, isMac, isWindows } from '$lib/platform';
   import {
     sftpOpen,
@@ -1124,7 +1125,7 @@ async function uploadExternalEdit(): Promise<void> {
   {#if openError}
     <div class="flex flex-1 flex-col items-center justify-center gap-2 p-10 text-center">
       <p class="font-medium">Could not open SFTP on {session.hostName}</p>
-      <p class="max-w-md text-sm text-muted">{openError}</p>
+      <p class="max-w-md text-sm text-muted">{$maskText(openError)}</p>
     </div>
 
   {:else if !view}
@@ -1443,7 +1444,6 @@ async function uploadExternalEdit(): Promise<void> {
 
     <!-- Transfer progress -->
 
-      <!-- Transfer progress -->
       {#if transfer}
         <div class="shrink-0 border-t border-default px-4 py-2.5" aria-label="transfer progress">
           <div class="flex items-start justify-between gap-3">
@@ -1529,11 +1529,15 @@ async function uploadExternalEdit(): Promise<void> {
             ></div>
           </div>
         </div>
-      {:else if view.error}
-        <div class="shrink-0 border-t border-default px-4 py-2 text-xs text-status-crit">
-          {view.error}
-        </div>
-      {/if}
+    {:else if view.error}
+      <!-- A cancel the user asked for is news, not a failure. -->
+      <div
+        class="shrink-0 border-t border-default px-4 py-2 text-xs
+          {view.error === CANCELLED ? 'text-muted' : 'text-status-crit'}"
+      >
+        {$maskText(view.error)}
+      </div>
+    {/if}
     </div>
   {/if}
 </div>
