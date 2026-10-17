@@ -333,7 +333,7 @@ async fn delete_remote_tree(
     let total_items = file_count(entries.len().saturating_add(1));
 
     // Children must be removed before their parent directories.
-    entries.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+    entries.sort_by_key(|b| std::cmp::Reverse(b.path.len()));
     let mut deleted = 0u32;
 
     for entry in entries {

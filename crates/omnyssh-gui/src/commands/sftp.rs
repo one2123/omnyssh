@@ -501,10 +501,8 @@ pub async fn sftp_open_external_editor(path: String, editor: String) -> Result<b
                     args.push("--wait".into());
                 }
             }
-            "kate" => {
-                if !args.iter().any(|a| a == "--block") {
-                    args.push("--block".into());
-                }
+            "kate" if !args.iter().any(|a| a == "--block") => {
+                args.push("--block".into());
             }
             _ => {}
         }
